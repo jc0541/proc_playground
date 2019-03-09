@@ -1,0 +1,8 @@
+[package]
+name = "playground"
+version = "0.1.0"
+authors = ["Josh Cohen <joshuasteelers@me.com>"]
+edition = "2018"
+
+[dependencies]
+proc_playground = { path = "../proc_playground" }

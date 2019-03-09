@@ -1,0 +1,17 @@
+[package]
+name = "proc_playground"
+version = "0.1.0"
+authors = ["Josh Cohen <joshuasteelers@me.com>"]
+edition = "2018"
+
+[dependencies]
+syn = { version = "0.15", features = ["full"] }
+quote = "0.6"
+proc-macro2 = "0.4"
+proc_helper_playground = { path = "../proc_helper_playground" }
+
+[dev-dependencies]
+playground = { path = "../playground" }
+
+[lib]
+proc-macro = true

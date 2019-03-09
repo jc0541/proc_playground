@@ -1,0 +1,7 @@
+[workspace]
+
+members = [
+    "proc_playground",
+    "playground",
+    "proc_helper_playground"
+]
