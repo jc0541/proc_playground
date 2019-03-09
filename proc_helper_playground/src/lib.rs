@@ -31,12 +31,15 @@ impl Parse for SpaceshipOp {
     }
 }
 
+
 #[derive(Debug)]
 pub struct LiteralClosedRange {
     pub lo: syn::Lit,
     pub sep: Token![..=],
     pub hi: syn::Lit,
 }
+
+
 
 impl Parse for LiteralClosedRange {
     fn parse(input: ParseStream) -> syn::Result<Self> {
@@ -47,6 +50,17 @@ impl Parse for LiteralClosedRange {
         })
     }
 }
+
+
+impl ToTokens for LiteralClosedRange {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        self.lo.to_tokens(tokens);
+        self.sep.to_tokens(tokens);
+        self.hi.to_tokens(tokens);
+    }
+}
+
+
 
 #[derive(Debug)]
 pub enum LiteralOrRange {
@@ -68,6 +82,16 @@ impl Parse for LiteralOrRange {
         }
     }
 }
+
+impl ToTokens for LiteralOrRange {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        match self {
+            LiteralOrRange::Literal(lit) => lit.to_tokens(tokens),
+            LiteralOrRange::Range(range) => range.to_tokens(tokens),
+        };
+    }
+}
+
 pub type LiteralPatterns = Punctuated<LiteralOrRange, Token![|]>;
 
 #[derive(Debug)]
@@ -86,6 +110,15 @@ impl Parse for LiteralOrPatterns {
             (1, LiteralOrRange::Literal(lit)) => LiteralOrPatterns::Literal((*lit).clone()), 
             _ => LiteralOrPatterns::MultiValued(patterns)
         })
+    }
+}
+
+impl ToTokens for LiteralOrPatterns {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        match self {
+            LiteralOrPatterns::Literal(lit) => lit.to_tokens(tokens),
+            LiteralOrPatterns::MultiValued(patterns) => patterns.to_tokens(tokens),
+        };
     }
 }
 
@@ -109,6 +142,29 @@ impl Parse for BidirectionalVariant {
     }
 }
 
+impl BidirectionalVariant {
+    fn to_tokens_with_filler<T>(&self, tokens: &mut TokenStream, filler: &T) where T: ToTokens {
+        // self.ident.to_tokens(tokens);
+        if let LiteralOrPatterns::MultiValued(_) = self.lit_or_patterns {
+            syn::token::Paren { span: Span::call_site() }
+                .surround(tokens, |tokens| {
+                    filler.to_tokens(tokens);
+                })
+        }
+    }
+
+    // fn to_tokens_with<F>(&self, tokens: &mut TokenStream, single: F, multi_valued: F)
+    // where
+    //     F: FnMut(&mut TokenStream)
+    // {
+    //     // self.ident.to_tokens(tokens);
+    //     match self.lit_or_patterns {
+    //         LiteralOrPatterns::Literal(_) => single(tokens),
+    //         LiteralOrPatterns::MultiValued(_) => multi_valued(tokens),
+    //     };
+    // }
+}
+
 
 
 pub struct BidirectionalVariantToTokensAdapter<'a, 'b> {
@@ -121,12 +177,7 @@ impl<'a, 'b> ToTokens for BidirectionalVariantToTokensAdapter<'a, 'b> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         tokens.append_all(&self.variant.attrs);
         self.variant.ident.to_tokens(tokens);
-        if let LiteralOrPatterns::MultiValued(_) = self.variant.lit_or_patterns {
-            syn::token::Paren { span: Span::call_site() }
-                .surround(tokens, |tokens| {
-                    self.ty.to_tokens(tokens)
-                })
-        }
+        self.variant.to_tokens_with_filler(tokens, self.ty);
     }
 }
 
@@ -162,25 +213,97 @@ impl Parse for BidirectionalEnum {
 }
 
 impl BidirectionalEnum {
-    fn from_enum_impl_tokens(&self, tokens: &mut TokenStream) {
+
+    // fn transform_variants<T, F, P>(&self, transformer: F) -> syn::punctuated::Punctuated<T, P>
+    // where
+    //     F: FnMut(syn::punctuated::Pair<BidirectionalVariant, Token![,]>) -> syn::punctuated::Pair<T, P>
+    // {
+    //     self.variants.pairs()
+    //         .map(transformer)
+    //         .collect()
+    // }
+
+
+    fn from_mapped_type_impl_tokens(&self, tokens: &mut TokenStream) {
         let ident = &self.ident;
         let from_type = &self.mapped_type;
-        let from_body_enum = quote! {
 
-        };
+        let from_arg_ident = Ident::new("from_data", Span::call_site());
+
+
+        let variant_iter = self.variants.iter().map(|variant| {
+            // variant.ident.to_tokens(&mut arm_tokens);
+
+            let variant_values = &variant.lit_or_patterns;
+            let variant_ident = &variant.ident;
+            let mut arm_tokens = quote! {
+                #variant_values => #variant_ident
+            };
+            variant.to_tokens_with_filler(&mut arm_tokens, &from_arg_ident);
+
+            arm_tokens
+        });
+
         tokens.extend(quote! {
             impl From<#from_type> for #ident {
-                fn from(from_data: #from_type) -> Self {
-
+                fn from(#from_arg_ident: #from_type) -> Self {
+                    use #ident::*;
+                    match from_data {
+                        #( #variant_iter,)*
+                    }
                 }
             }
         })
+    }
+
+
+
+    fn from_enum_impl_tokens(&self, tokens: &mut TokenStream) {
+        let ident = &self.ident;
+        let from_type = &self.mapped_type;
+
+        let inner_ident = Ident::new("n", Span::call_site());
+
+        let variant_iter = self.variants.iter().map(|variant| {
+            // let var_tokens = variant.to_tokens_with();
+            let mut arm_tokens = TokenStream::new();
+            variant.ident.to_tokens(&mut arm_tokens);
+        
+            variant.to_tokens_with_filler(&mut arm_tokens, &inner_ident);
+            syn::token::FatArrow { spans: [Span::call_site(); 2] }
+                .to_tokens(&mut arm_tokens);
+            
+            match &variant.lit_or_patterns {
+                LiteralOrPatterns::Literal(lit) =>  lit.to_tokens(&mut arm_tokens),
+                LiteralOrPatterns::MultiValued(_) => inner_ident.to_tokens(&mut arm_tokens),
+            };
+            // arms_tokens.extend(quote! {
+            //       => 
+            // });
+            arm_tokens
+        });
+
+        // let from_body_enum = quote! {
+
+        // };
+        tokens.extend(quote! {
+            impl From<#ident> for #from_type {
+                fn from(from_data: #ident) -> Self {
+                    use #ident::*;
+                    match from_data {
+                        #( #variant_iter,)*
+                    } 
+                }
+            }
+        });
         // syn::token::Impl { span: Span::call_site() }
         //     .to_tokens(tokens);
         
         
     }
 }
+
+
 
 impl ToTokens for BidirectionalEnum {
     fn to_tokens(&self, tokens: &mut TokenStream) {
@@ -189,8 +312,7 @@ impl ToTokens for BidirectionalEnum {
         self.enum_token.to_tokens(tokens);
         self.ident.to_tokens(tokens);
         self.brace_token.surround(tokens, |tokens| {
-            self.variants.pairs()
-                .map(|pair| match pair {
+            self.variants.pairs().map(|pair| match pair {
                     syn::punctuated::Pair::Punctuated(variant, _) | syn::punctuated::Pair::End(variant)  => syn::punctuated::Pair::Punctuated(BidirectionalVariantToTokensAdapter {
                         variant: &variant,
                         ty: &self.mapped_type
@@ -198,7 +320,9 @@ impl ToTokens for BidirectionalEnum {
                 })
                 .collect::<Punctuated<BidirectionalVariantToTokensAdapter, Token![,]>>()
              .to_tokens(tokens);  
-        })
+        });
+        self.from_enum_impl_tokens(tokens);
+        self.from_mapped_type_impl_tokens(tokens);
 
     }
 }
